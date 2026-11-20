@@ -1,0 +1,26 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "caminho-livre-mvp-20261120",
+          "appId": "1:79062735599:android:136a649b8d732d63c4991a",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "caminho-livre-mvp-20261120",
+          "configurations": {
+            "android": "1:79062735599:android:136a649b8d732d63c4991a",
+            "web": "1:79062735599:web:f010296a65aa8e51c4991a"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

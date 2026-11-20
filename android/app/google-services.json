@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "79062735599",
+    "project_id": "caminho-livre-mvp-20261120",
+    "storage_bucket": "caminho-livre-mvp-20261120.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:79062735599:android:136a649b8d732d63c4991a",
+        "android_client_info": {
+          "package_name": "br.com.caminholivre.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCJ5Vj_6tcPiijs4R9SVcglSNHd5ZX97sE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,103 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function admin() {
+      return signedIn()
+        && request.auth.token.email == 'edwardcastro2014@gmail.com';
+    }
+
+    function registeredUser() {
+      return signedIn()
+        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    function validOccurrence(data) {
+      return data.keys().hasOnly([
+          'address',
+          'category',
+          'createdAt',
+          'description',
+          'latitude',
+          'longitude',
+          'reporterId',
+          'status'
+        ])
+        && data.keys().hasAll([
+          'address',
+          'category',
+          'createdAt',
+          'description',
+          'latitude',
+          'longitude',
+          'reporterId',
+          'status'
+        ])
+        && data.category is string
+        && data.category.size() >= 3
+        && data.category.size() <= 80
+        && data.description is string
+        && data.description.size() <= 500
+        && data.address is string
+        && data.address.size() <= 180
+        && data.latitude is number
+        && data.latitude >= -90
+        && data.latitude <= 90
+        && data.longitude is number
+        && data.longitude >= -180
+        && data.longitude <= 180
+        && data.status == 'pendente'
+        && data.reporterId == request.auth.uid
+        && data.createdAt == request.time;
+    }
+
+    match /occurrences/{occurrenceId} {
+      allow read: if admin()
+        || resource.data.status in ['confirmada', 'resolvida'];
+      allow create: if registeredUser() && validOccurrence(request.resource.data);
+      allow update: if admin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'adminNote',
+          'updatedAt'
+        ]);
+      allow delete: if admin();
+    }
+
+    match /users/{userId} {
+      allow read, create, update: if registeredUser()
+        && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /occurrences/{occurrenceId}/feedback/{userId} {
+      allow read: if true;
+      allow create, update: if registeredUser()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['type', 'createdAt'])
+        && request.resource.data.type in ['confirmar', 'contestar'];
+      allow delete: if registeredUser() && request.auth.uid == userId;
+    }
+
+    match /segments/{segmentId} {
+      allow read: if admin() || resource.data.status in ['confirmada', 'resolvida'];
+      allow create: if registeredUser()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.status == 'pendente'
+        && request.resource.data.points.size() >= 2
+        && request.resource.data.points.size() <= 500
+        && request.resource.data.keys().hasOnly([
+          'points', 'description', 'createdAt', 'reporterId', 'status'
+        ]);
+      allow update: if admin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'severity', 'adminNote', 'updatedAt'
+        ]);
+      allow delete: if admin();
+    }
+  }
+}
