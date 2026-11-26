@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -10,6 +11,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'data/queries.dart';
 import 'firebase_options.dart';
 
 final highContrastNotifier = ValueNotifier<bool>(false);
@@ -18,6 +20,31 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const CaminhoLivreApp());
+
+  // Restaura o tema salvo e mantém o estado em sincronia com login/logout.
+  unawaited(restoreHighContrastPreference());
+  FirebaseAuth.instance.authStateChanges().listen(
+    (_) => unawaited(restoreHighContrastPreference()),
+  );
+}
+
+/// Aplica a preferência de alto contraste salva em `users/{uid}`.
+Future<void> restoreHighContrastPreference() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null || user.isAnonymous) {
+    highContrastNotifier.value = false;
+    return;
+  }
+  try {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
+    highContrastNotifier.value =
+        snapshot.data()?['highContrast'] as bool? ?? false;
+  } catch (_) {
+    // Mantém o tema padrão quando as preferências não estão disponíveis.
+  }
 }
 
 class CaminhoLivreApp extends StatelessWidget {
@@ -239,7 +266,8 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  Position? _currentPosition;
+  /// Notifica só os marcadores; o mapa em si não é reconstruído a cada leitura.
+  final _currentPosition = ValueNotifier<Position?>(null);
   StreamSubscription<Position>? _positionSubscription;
 
   @override
@@ -261,7 +289,7 @@ class _MapScreenState extends State<MapScreen> {
       }
 
       final position = await Geolocator.getCurrentPosition();
-      if (mounted) setState(() => _currentPosition = position);
+      if (mounted) _currentPosition.value = position;
       _positionSubscription =
           Geolocator.getPositionStream(
             locationSettings: const LocationSettings(
@@ -269,7 +297,7 @@ class _MapScreenState extends State<MapScreen> {
               distanceFilter: 20,
             ),
           ).listen((position) {
-            if (mounted) setState(() => _currentPosition = position);
+            if (mounted) _currentPosition.value = position;
           });
     } catch (_) {
       // The map remains usable with the last known public position data.
@@ -279,6 +307,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _positionSubscription?.cancel();
+    _currentPosition.dispose();
     super.dispose();
   }
 
@@ -325,7 +354,7 @@ class _MapScreenState extends State<MapScreen> {
                     ?.copyWith(color: const Color(0xFF4A5568)),
               ),
               const SizedBox(height: 20),
-              MapPreview(currentPosition: _currentPosition),
+              MapPreview(position: _currentPosition),
               const SizedBox(height: 20),
               const _ApprovedSegmentsList(),
               const SizedBox(height: 20),
@@ -375,9 +404,9 @@ class _MapScreenState extends State<MapScreen> {
 }
 
 class MapPreview extends StatelessWidget {
-  const MapPreview({super.key, this.currentPosition});
+  const MapPreview({super.key, required this.position});
 
-  final Position? currentPosition;
+  final ValueListenable<Position?> position;
 
   @override
   Widget build(BuildContext context) {
@@ -401,9 +430,12 @@ class MapPreview extends StatelessWidget {
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'br.com.caminholivre.app',
               ),
-              _ObstacleMarkers(
-                fallbackPoints: points,
-                currentPosition: currentPosition,
+              ValueListenableBuilder<Position?>(
+                valueListenable: position,
+                builder: (context, currentPosition, _) => _ObstacleMarkers(
+                  fallbackPoints: points,
+                  currentPosition: currentPosition,
+                ),
               ),
               const _ApprovedSegmentLines(),
               const Positioned(left: 16, bottom: 16, child: _SegmentLegend()),
@@ -800,11 +832,7 @@ class _ApprovedSegmentLines extends StatelessWidget {
   Widget build(BuildContext context) {
     if (Firebase.apps.isEmpty) return const SizedBox.shrink();
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('segments')
-          .where('status', whereIn: ['confirmada', 'resolvida'])
-          .limit(100)
-          .snapshots(),
+      stream: AppQueries.instance.approvedSegments,
       builder: (context, snapshot) {
         final lines = <Polyline>[];
         for (final doc in snapshot.data?.docs ?? []) {
@@ -816,12 +844,12 @@ class _ApprovedSegmentLines extends StatelessWidget {
               .map((point) => LatLng(point.latitude, point.longitude))
               .toList();
           if (points.length >= 2) {
+            // Trecho resolvido sem severidade salva (dados antigos) é acessível.
+            final severity =
+                data['severity'] as String? ??
+                (data['status'] == 'resolvida' ? 'acessivel' : null);
             lines.add(
-              Polyline(
-                points: points,
-                color: _color(data['severity'] as String?),
-                strokeWidth: 7,
-              ),
+              Polyline(points: points, color: _color(severity), strokeWidth: 7),
             );
           }
         }
@@ -862,7 +890,10 @@ class _SegmentLegend extends StatelessWidget {
 class _ApprovedSegmentsList extends StatelessWidget {
   const _ApprovedSegmentsList();
 
-  String _label(String? severity) {
+  String _label(Map<String, dynamic> data) {
+    final severity =
+        data['severity'] as String? ??
+        (data['status'] == 'resolvida' ? 'acessivel' : null);
     switch (severity) {
       case 'acessivel':
         return 'Acessível';
@@ -879,13 +910,9 @@ class _ApprovedSegmentsList extends StatelessWidget {
   Widget build(BuildContext context) {
     if (Firebase.apps.isEmpty) return const SizedBox.shrink();
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('segments')
-          .where('status', whereIn: ['confirmada', 'resolvida'])
-          .limit(20)
-          .snapshots(),
+      stream: AppQueries.instance.approvedSegments,
       builder: (context, snapshot) {
-        final segments = snapshot.data?.docs ?? [];
+        final segments = (snapshot.data?.docs ?? []).take(20).toList();
         if (segments.isEmpty) return const SizedBox.shrink();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -899,7 +926,7 @@ class _ApprovedSegmentsList extends StatelessWidget {
               Card(
                 child: ListTile(
                   leading: const Icon(Icons.route_rounded),
-                  title: Text(_label(segment.data()['severity'] as String?)),
+                  title: Text(_label(segment.data())),
                   subtitle: Text(
                     segment.data()['description'] as String? ?? 'Sem descrição',
                   ),
@@ -939,10 +966,7 @@ class _ApprovedSegmentsList extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                _label(data['severity'] as String?),
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
+              Text(_label(data), style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 8),
               Text(data['description'] as String? ?? 'Sem descrição'),
               const SizedBox(height: 8),
@@ -996,12 +1020,7 @@ class _ObstacleMarkers extends StatelessWidget {
     }
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('occurrences')
-          .where('status', whereIn: ['confirmada', 'resolvida'])
-          .orderBy('createdAt', descending: true)
-          .limit(50)
-          .snapshots(),
+      stream: AppQueries.instance.approvedOccurrences,
       builder: (context, snapshot) {
         final points =
             snapshot.data?.docs
@@ -1157,11 +1176,7 @@ class _OccurrencesScreenState extends State<OccurrencesScreen> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760),
           child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('occurrences')
-                .where('status', whereIn: ['confirmada', 'resolvida'])
-                .orderBy('createdAt', descending: true)
-                .snapshots(),
+            stream: AppQueries.instance.approvedOccurrences,
             builder: (context, snapshot) {
               final occurrences =
                   snapshot.data?.docs.map(Obstacle.fromFirestore).toList() ??
@@ -1918,160 +1933,6 @@ String _authMessage(String code) {
   }
 }
 
-class AdminOccurrencesScreen extends StatelessWidget {
-  const AdminOccurrencesScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Moderação de ocorrências')),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('occurrences')
-            .orderBy('createdAt', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return const _FeedMessage(
-              icon: Icons.lock_outline_rounded,
-              title: 'Acesso reservado aos administradores.',
-              message:
-                  'A conta precisa ter a permissão administrativa configurada.',
-            );
-          }
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          final docs = snapshot.data!.docs;
-          final pending = docs
-              .where((doc) => doc.data()['status'] == 'pendente')
-              .toList();
-
-          return ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              Text(
-                '${pending.length} pendente(s) de análise',
-                style: Theme.of(context).textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                'Registros próximos e da mesma categoria ajudam a confirmar um problema.',
-              ),
-              const SizedBox(height: 20),
-              for (final doc in pending) ...[
-                _AdminOccurrenceCard(doc: doc, allPending: pending),
-                const SizedBox(height: 12),
-              ],
-              if (pending.isEmpty)
-                const _FeedMessage(
-                  icon: Icons.check_circle_outline_rounded,
-                  title: 'Tudo em dia.',
-                  message: 'Não há ocorrências pendentes para moderar.',
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _AdminOccurrenceCard extends StatelessWidget {
-  const _AdminOccurrenceCard({required this.doc, required this.allPending});
-
-  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
-  final List<QueryDocumentSnapshot<Map<String, dynamic>>> allPending;
-
-  int get similarCount {
-    final data = doc.data();
-    final category = data['category'];
-    final latitude = (data['latitude'] as num?)?.toDouble();
-    final longitude = (data['longitude'] as num?)?.toDouble();
-    if (latitude == null || longitude == null) return 1;
-
-    return allPending.where((other) {
-          if (other.id == doc.id || other.data()['category'] != category) {
-            return false;
-          }
-          final otherLatitude = (other.data()['latitude'] as num?)?.toDouble();
-          final otherLongitude = (other.data()['longitude'] as num?)
-              ?.toDouble();
-          if (otherLatitude == null || otherLongitude == null) return false;
-          return Geolocator.distanceBetween(
-                latitude,
-                longitude,
-                otherLatitude,
-                otherLongitude,
-              ) <=
-              30;
-        }).length +
-        1;
-  }
-
-  Future<void> _moderate(BuildContext context, String status) async {
-    try {
-      await doc.reference.update({
-        'status': status,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-      if (context.mounted) {
-        _showMessage(context, 'Ocorrência atualizada.');
-      }
-    } catch (_) {
-      if (context.mounted) {
-        _showMessage(context, 'A conta não possui permissão administrativa.');
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final data = doc.data();
-    final category = data['category'] as String? ?? 'Obstáculo';
-    final description = data['description'] as String? ?? '';
-
-    return Card(
-      elevation: 0,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              category,
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            if (description.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(description),
-            ],
-            const SizedBox(height: 8),
-            Text('$similarCount registro(s) semelhante(s) em até 30 m.'),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              children: [
-                FilledButton.tonal(
-                  onPressed: () => _moderate(context, 'confirmada'),
-                  child: const Text('Aprovar'),
-                ),
-                OutlinedButton(
-                  onPressed: () => _moderate(context, 'rejeitada'),
-                  child: const Text('Rejeitar'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class ReportObstacleScreen extends StatefulWidget {
   const ReportObstacleScreen({super.key});
 
@@ -2155,8 +2016,13 @@ class _ReportObstacleScreenState extends State<ReportObstacleScreen> {
       });
 
       if (mounted) {
+        // Captura o messenger antes do pop para não consultar um contexto
+        // desativado depois que a rota é removida.
+        final messenger = ScaffoldMessenger.of(context);
         Navigator.of(context).pop();
-        _showMessage(context, 'Ocorrência registrada com sucesso.');
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Ocorrência registrada com sucesso.')),
+        );
       }
     } catch (_) {
       if (mounted) {

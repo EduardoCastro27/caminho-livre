@@ -47,3 +47,7 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Artefatos locais de captura/demonstração (vídeo, frames, screenshots)
+video_frames/
+work_mumu*.png

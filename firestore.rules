@@ -6,9 +6,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // A custom claim `admin: true` é o caminho recomendado. O e-mail do dono
+    // permanece como compatibilidade até a claim ser distribuída.
     function admin() {
       return signedIn()
-        && request.auth.token.email == 'edwardcastro2014@gmail.com';
+        && (request.auth.token.admin == true
+          || request.auth.token.email == 'edwardcastro2014@gmail.com');
     }
 
     function registeredUser() {

@@ -70,12 +70,18 @@ class AdminGate extends StatelessWidget {
         return FutureBuilder<IdTokenResult>(
           future: user.getIdTokenResult(true),
           builder: (context, claimSnapshot) {
+            if (claimSnapshot.hasError) {
+              return const AdminAccessDeniedScreen();
+            }
             if (!claimSnapshot.hasData) {
               return const Scaffold(
                 body: Center(child: CircularProgressIndicator()),
               );
             }
-            final isAdmin = user.email?.toLowerCase() == administratorEmail;
+            // Custom claim `admin: true` (preferencial) ou o e-mail do dono.
+            final isAdmin =
+                claimSnapshot.data!.claims?['admin'] == true ||
+                user.email?.toLowerCase() == administratorEmail;
             return isAdmin
                 ? const AdminDashboardScreen()
                 : const AdminAccessDeniedScreen();
@@ -435,7 +441,10 @@ class _AdminSegmentCard extends StatelessWidget {
               child: const Text('Bloqueado'),
             ),
             OutlinedButton(
-              onPressed: () => _setStatus(context, 'resolvida'),
+              // Um trecho resolvido passa a ser acessível: garante severidade
+              // definida para a linha aparecer com a cor da legenda.
+              onPressed: () =>
+                  _setStatus(context, 'resolvida', severity: 'acessivel'),
               child: const Text('Resolver'),
             ),
             OutlinedButton(
